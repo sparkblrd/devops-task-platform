@@ -5,18 +5,36 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.task_service import TaskService, get_task_service
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.database import Base
 
 @pytest.fixture
 def client():
-    """Give each test its own store and remove the override afterward."""
-    service = TaskService()
-    app.dependency_overrides[get_task_service] = lambda: service
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+
+    Base.metadata.create_all(bind=engine)
+
+    TestSession = sessionmaker(bind=engine, autoflush=False)
+
+    def override_task_service():
+        with TestSession() as session:
+            yield TaskService(session)
+
+    app.dependency_overrides[get_task_service] = override_task_service
+
     try:
         with TestClient(app) as test_client:
             yield test_client
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_task_service, None)
+        engine.dispose()
 
 
 def test_root(client: TestClient) -> None:
